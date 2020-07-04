@@ -1,0 +1,27 @@
+plugins {
+    id 'java'
+}
+
+apply plugin: 'java'
+
+group 'net.swedz'
+version '1.0-SNAPSHOT'
+
+configurations {
+    shade
+    compile.extendsFrom shade
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    shade group: 'redis.clients', name: 'jedis', version: '3.3.0'
+    compile group: 'com.google.guava', name: 'guava', version: '29.0-jre'
+    compile group: 'org.json', name: 'json', version: '20200518'
+}
+
+jar {
+    configurations.shade.each { dep -> from(project.zipTree(dep)) { exclude 'META-INF', 'META-INF/**' } }
+}
