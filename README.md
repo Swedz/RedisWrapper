@@ -79,5 +79,7 @@ repositories {
 ```
 
 ```groovy
-compile group: 'net.swedz', name: 'RedisWrapper', version: '1.0-SNAPSHOT'
+dependencies {
+    compile group: 'net.swedz', name: 'RedisWrapper', version: '1.0-SNAPSHOT'
+}
 ```
