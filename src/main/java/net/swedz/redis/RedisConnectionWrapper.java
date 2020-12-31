@@ -1,93 +1,142 @@
 package net.swedz.redis;
 
-import com.google.common.collect.Lists;
+import net.swedz.redis.channel.RedisChannelHandle;
+import net.swedz.redis.parser.RedisObjectParser;
+import net.swedz.redis.parser.RedisParserHandle;
+import net.swedz.redis.pubsub.RedisPubSubHandle;
+import net.swedz.redis.resource.RedisResourceWrapper;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
-import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 
-public class RedisConnectionWrapper {
-	private final JedisPool                        jedisPool;
-	private final Map<String, List<RedisListener>> listeners;
+public final class RedisConnectionWrapper {
+	private final JedisPool jedis;
 	
-	private RedisSubscriptionThread subscriptionThread;
+	private final RedisParserHandle parser;
+	private final RedisChannelHandle channels;
+	private final RedisPubSubHandle pubSub;
 	
-	public RedisConnectionWrapper(String hostname, int port, String password, int timeout) {
-		GenericObjectPoolConfig poolConfig = new GenericObjectPoolConfig();
-		poolConfig.setMaxTotal(64);
-		poolConfig.setMaxIdle(64);
-		poolConfig.setMinIdle(16);
-		this.jedisPool = new JedisPool(poolConfig, hostname, port, timeout, password);
-		this.listeners = new HashMap<>();
+	private RedisConnectionWrapper(String hostname, int port, String password, int timeout, GenericObjectPoolConfig config) {
+		this.jedis = new JedisPool(config, hostname, port, timeout, password);
+		this.parser = new RedisParserHandle(this);
+		this.channels = new RedisChannelHandle(this);
+		this.pubSub = new RedisPubSubHandle(this);
 	}
 	
-	public JedisPool getJedisPool() {
-		return jedisPool;
+	public JedisPool getJedis() {
+		return jedis;
 	}
 	
-	public Jedis getResource() {
-		return getJedisPool().getResource();
+	public RedisResourceWrapper getResource() {
+		return new RedisResourceWrapper(this);
 	}
 	
-	public Map<String, List<RedisListener>> getListeners() {
-		return listeners;
-	}
-	
-	public List<RedisListener> getListeners(String channel) {
-		return this.getListeners().getOrDefault(channel, Lists.newArrayList());
-	}
-	
-	private void addListener(String channel, RedisListener listener) {
-		List<RedisListener> listeners = this.getListeners(channel);
-		listeners.add(listener);
-		this.listeners.put(channel, listeners);
-	}
-	
-	public void registerListeners(RedisListener... listeners) {
-		// Make sure we only call this once
-		// We don't want more than one subscription running
-		if(this.listeners.size() > 0)
-			throw new IllegalStateException("Cannot register listeners more than once!");
-		
-		// Get all of the channels
-		final List<String> allChannels = Lists.newArrayList();
-		for(RedisListener listener : listeners) {
-			Class<? extends RedisListener> listenerClass = listener.getClass();
-			// Make sure the annotation is present
-			if(!listenerClass.isAnnotationPresent(RedisSubscriber.class))
-				throw new IllegalArgumentException("RedisListener (" + listenerClass.getSimpleName() + ") is missing RedisSubscriber annotation!");
-			// Get the annotation data
-			RedisSubscriber subscriber = listenerClass.getAnnotation(RedisSubscriber.class);
-			String[] channels = subscriber.channels();
-			// Track these channels
-			allChannels.addAll(Arrays.asList(channels));
-			for(String channel : channels)
-				this.addListener(channel, listener);
-		}
-		
-		// Subscribe to the channels on a new thread so we don't block anything
-		subscriptionThread = new RedisSubscriptionThread(this, allChannels.toArray(new String[0]));
-		subscriptionThread.start();
-	}
-	
-	public void safeResourceCall(Consumer<Jedis> consumer) {
-		try (Jedis resource = this.getResource()) {
-			consumer.accept(resource);
+	public void safeResourceCall(Consumer<RedisResourceWrapper> action) {
+		try (RedisResourceWrapper resource = this.getResource()) {
+			action.accept(resource);
 		}
 	}
 	
-	public void asyncResourceCall(Consumer<Jedis> consumer) {
-		CompletableFuture.runAsync(() -> this.safeResourceCall(consumer));
+	public void asyncResourceCall(Consumer<RedisResourceWrapper> action) {
+		CompletableFuture.runAsync(() -> this.safeResourceCall(action));
+	}
+	
+	public RedisParserHandle getParser() {
+		return parser;
+	}
+	
+	public <T> T parse(Class<? extends RedisObjectParser<T>> parserClass, String value) {
+		return parser.get(parserClass).parse(value);
+	}
+	
+	public <T> String serialize(Class<? extends RedisObjectParser<T>> parserClass, T value) {
+		return parser.get(parserClass).serialize(value);
+	}
+	
+	public void registerParsers(RedisObjectParser<?>...parsers) {
+		parser.register(parsers);
+	}
+	
+	public RedisChannelHandle getChannels() {
+		return channels;
+	}
+	
+	public void registerChannels(Object...instances) {
+		channels.register(instances);
+	}
+	
+	public RedisPubSubHandle getPubSub() {
+		return pubSub;
 	}
 	
 	public void close() {
-		subscriptionThread.interrupt();
-		jedisPool.close();
+		pubSub.close();
+		jedis.close();
+	}
+	
+	public static Builder builder() {
+		return new Builder();
+	}
+	
+	public static final class Builder {
+		private String hostname;
+		private int port;
+		private String password;
+		private int timeout;
+		private GenericObjectPoolConfig config;
+		
+		private Builder() {
+			config = new GenericObjectPoolConfig();
+			config.setMaxTotal(64);
+			config.setMaxIdle(64);
+			config.setMinIdle(16);
+		}
+		
+		public String getHostname() {
+			return hostname;
+		}
+		
+		public int getPort() {
+			return port;
+		}
+		
+		public String getPassword() {
+			return password;
+		}
+		
+		public int getTimeout() {
+			return timeout;
+		}
+		
+		public GenericObjectPoolConfig getConfig() {
+			return config;
+		}
+		
+		public Builder ip(String hostname, int port) {
+			this.hostname = hostname;
+			this.port = port;
+			return this;
+		}
+		
+		public Builder password(String password) {
+			this.password = password;
+			return this;
+		}
+		
+		public Builder timeout(int timeout) {
+			this.timeout = timeout;
+			return this;
+		}
+		
+		public Builder config(Consumer<GenericObjectPoolConfig> consumer) {
+			consumer.accept(config);
+			return this;
+		}
+		
+		public RedisConnectionWrapper build() {
+			return new RedisConnectionWrapper(hostname, port, password, timeout, config);
+		}
 	}
 }

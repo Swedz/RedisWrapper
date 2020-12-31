@@ -1,11 +1,13 @@
 plugins {
     id 'java'
+    id 'maven'
 }
 
 apply plugin: 'java'
+apply plugin: 'maven'
 
 group 'net.swedz'
-version '1.0-SNAPSHOT'
+version '1.2-SNAPSHOT'
 
 configurations {
     shade
@@ -17,11 +19,33 @@ repositories {
 }
 
 dependencies {
-    shade group: 'redis.clients', name: 'jedis', version: '3.3.0'
-    compile group: 'com.google.guava', name: 'guava', version: '29.0-jre'
-    compile group: 'org.json', name: 'json', version: '20200518'
+    compile group: 'redis.clients', name: 'jedis', version: '3.3.0'
 }
 
 jar {
-    configurations.shade.each { dep -> from(project.zipTree(dep)) { exclude 'META-INF', 'META-INF/**' } }
+    destinationDirectory = file("/export/${project.version}")
+    archiveName "${project.name}-${project.version}.jar"
+}
+
+def generatePom() {
+    pom {
+        project {
+            groupId groupId
+            artifactId project.name
+            version project.version
+            withXml {
+                def repsNode = asNode().appendNode('repositories')
+                project.repositories.forEach({
+                    def repNode = repsNode.appendNode('repository')
+                    repNode.appendNode('id', it.name)
+                    repNode.appendNode('url', it.properties.get('url'))
+                })
+            }
+        }
+    }.writeTo("/export/${project.version}/${project.name}-${project.version}.pom")
+}
+
+task compileFully {
+    dependsOn 'jar'
+    generatePom()
 }

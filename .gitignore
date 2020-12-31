@@ -1,4 +1,5 @@
 /build/
+/export
 /.gradle/
 /.idea/
 gradlew.bat
